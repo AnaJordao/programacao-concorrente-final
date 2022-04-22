@@ -6,42 +6,40 @@
 
 #define PROD 1 //número de produtores
 #define COMP 3 // número de compositores
-#define CANT 5 // numeor de cantores
+#define CANT 5 // numero de cantores
 #define MUS 10 //tamanho do buffer da musica
+#define META 3 // meta que o produtor tem que bater para ter 1 dia de folga
 
 #define COMPONDO 0          // estado da musica quando os compositores estao trabalhando nela
 #define GRAVANDO (MUS/2)    // estado da musica quando os cantores estao trabahando nela
 #define FINALIZANDO (MUS-1) // estado da musica quando o produtor precisa finaliza-la
 
-int count = 0;                // contador de itens no buffer
-int num_comp = 0;
-int num_cant = 0;
-int bufferMusica[MUS] = {0};    // buffer eh um array com tamanho MUS, iniciado com 0 em todas as posicoes
-float estado = COMPONDO;        // estado atual da musica que esta sendo produzida
-//int index_produtor = -1;      // index do produtor no buffer
-//int index_consumidor = -1;    // index do consumidor no buffer
+int count = 0;                // contador de itens no buffer (barra de prograsso para o termino da musica)
+int quantidade_musicas = 0;   // quantidade de musicas prontas
+int bufferMusica[MUS] = {0};  // buffer eh um array com tamanho MUS, iniciado com 0 em todas as posicoes
+float estado = COMPONDO;      // estado inicial da musica que esta sendo produzida
 
-void * produtor(void * meuid);
-void * compositor (void * meuid);
-void * cantor (void * meuid);
+void * produtor(void * meuid);    // funcao do produtor
+void * compositor (void * meuid); // funcao do compositor
+void * cantor (void * meuid);     // funcao do cantor
 
-void produz_musica();          // funcao para o produtor produzir um item
-void progredir_musica(); // funcao para o produtor inserir o item no buffer
-void produz_musica();          // funcao para o consumidor tirar um item do buffer
-void compor_musica(int item);// funcao que simula o consumo do item pelo consumidor
-void gravar_musica(int item);
-void finalizar_musica();
-void imprime_buffer();      // funcao que imprime o estado do buffer na tela
+void produz_musica();         // funcao que simula o produtor produzindo uma parte da musica
+void progredir_musica();      // funcao para que a barra de progresso (buffer) seja atualizada
+void compor_musica(int item); // funcao que simula o compositor compondo uma parte da musica
+void gravar_musica(int item); // funcao que simula o cantor gravando uma parte da musica
+void finalizar_musica();      // funcao que simula o produtor finalizando a musica
+void imprime_buffer();        // funcao que imprime o estado da barra de progresso (buffer) na tela
+void limpa_buffer();          // funcao que limpa o buffer quando uma nova musica comeca a ser feita
 
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;         // lock usado para as variaveis condicionais
 pthread_mutex_t lock_estudio = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t lock_comp = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t lock_cant = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t lock_folga = PTHREAD_MUTEX_INITIALIZER;   // lock usado para quando o produtor tira folga
 pthread_cond_t produtor_cond = PTHREAD_COND_INITIALIZER;  // variavel condicional do produtor
 pthread_cond_t compositor_cond = PTHREAD_COND_INITIALIZER;// variavel condicional do compositor
 pthread_cond_t cantor_cond = PTHREAD_COND_INITIALIZER;    // variavel condicional do compositor
+sem_t sem_musicas;                                        // semaforo que serve de contador de musicas ja feitas
 
-void main(argc, argv)
+void main(argc, argv) // na funcao main, o semaforo sera inicializado e as threads serao criadas
 int argc;
 char *argv[];
 {
@@ -50,7 +48,9 @@ char *argv[];
   int i, n, m;
   int *id;
 
-  pthread_t tid[PROD];
+  sem_init(&sem_musicas, 0, 0); // eh inicializado com 0 permissoes pois nenhuma musica foi feita ainda
+
+  pthread_t tid[PROD];  // criacao de 1 produtor
    
   for (i = 0; i < PROD; i++)
   {
@@ -65,7 +65,7 @@ char *argv[];
     }
   }
 
-  pthread_t tCid[COMP];
+  pthread_t tCid[COMP]; // criacao de um numero COMP de compositores
 
   for (i = 0; i < COMP; i++)
   {
@@ -80,7 +80,7 @@ char *argv[];
     }
   }
 
-  pthread_t tCaid[CANT];
+  pthread_t tCaid[CANT];  // criacao de um numero CANT de cantores
 
   for (i = 0; i < CANT; i++)
   {
@@ -99,150 +99,140 @@ char *argv[];
 
 }
 
-void * produtor (void* pi){
+void * produtor (void* pi){   // o produtor pode trabalhar em qualquer estado da musica e somente ele pode finaliza-la
 
   while(1){
-
-    pthread_mutex_lock(&lock);                  // permite que soh o produtor acesse o buffer
+    pthread_mutex_lock(&lock);                                      // o produto pega o lock             
     
-        if(estado == COMPONDO){
-            pthread_cond_broadcast(&compositor_cond);  // o produtor acorda o consumidor para voltar a consumir os itens
-            printf("OS COMPOSITORES ESTÃO ACORDADOS\n");
-        }
+      if(estado == COMPONDO || (count>= 0 && count < MUS/2)){       // se o estado da musica for COMPONDO
+        pthread_cond_broadcast(&compositor_cond);                   // os compositores acordam
+      }
 
-        if(estado == GRAVANDO){                           // se o buffer soh tiver um item
-            pthread_cond_broadcast(&cantor_cond);  // o produtor acorda o consumidor para voltar a consumir os itens
-            printf("OS CANTORES ESTÃO ACORDADOS\n");
-        }
+      if(estado == GRAVANDO || (count >= MUS/2 && count < MUS-1)){  // se o estado da musica for GRAVANDO                  
+        pthread_cond_broadcast(&cantor_cond);                       // os cantores acordam
+      }
 
-        if(estado == FINALIZANDO){
-            finalizar_musica(); 
-            count = 0;
-            estado = COMPONDO;           
-        }
-    pthread_mutex_unlock(&lock);                // produtor libera o lock
-
-    pthread_mutex_lock(&lock_estudio);
+      if(estado == FINALIZANDO || count == MUS - 1){  // se o estado da musica for FINALIZANDO
+        quantidade_musicas++;                         // o contador de musicad prontas eh incrementado
+        finalizar_musica();                           // chama a funcao para simular a finalizacao da musica
+        progredir_musica();                           // chama a funcao que atualiza o buffer e o estado
+        count = 0;                                    // o contador do buffer retorna a 0
+        limpa_buffer();                               // o buffer eh limpado para comecar uma nova musica
+        estado = COMPONDO;                            // o estado volta ao inicial COMPONDO
           
-        produz_musica();                     
-        progredir_musica();                      
-    pthread_mutex_unlock(&lock_estudio);
+        sem_post(&sem_musicas);                       // da um post no semaforo de musicas feitas
+        pthread_cond_broadcast(&compositor_cond);     // acorda os compositores novamente
+      }
+    pthread_mutex_unlock(&lock);                      // devolve o lock 
+
+    pthread_mutex_lock(&lock_folga);        // o produtor pega o lock a folga
+      if(quantidade_musicas != META){       // se o contador de musicas prontas for diferente da meta, entao ele ainda nao a bateu
+        produz_musica();                    // chama a funcao para simular a producao de parte da musica          
+        progredir_musica();                 // chama a funcao para progredir a barra de progresso
+      }         
+      else if(quantidade_musicas == META){  // se a quantidade de musicas prontas for igual a meta, entao ele bate
+        printf("O PRODUTOR BATEU A META E TIROU UM DIA DE FOLGA!\n");
+        sleep(30);                          // tempo para simular a folga do produtor
+
+        for(int i = META; i > 0; i--){      // ele volta todas as permissoes do semaforo   
+            sem_wait(&sem_musicas); 
+        }
+        quantidade_musicas = 0;             // a quantidade de musicas prontas volta a ser 0
+        printf("O PRODUTOR VOLTOU DA FOLGA!\n");// ele volta da folga
+      }
+    pthread_mutex_unlock(&lock_folga);      // devolve o lock
   }
   pthread_exit(0);
-  
 }
 
-void * compositor (void* pi){
+void * compositor (void* pi){ // o compositor soh pode trabalhar na musica quando o estado dela eh COMPONDO
+
+  while(1){  
+    pthread_mutex_lock(&lock);                                    // compositor pega o lock
+      while(estado != COMPONDO || !(count>= 0 && count < MUS/2)){ // se o estado nao estiver em COMPONDO                          
+          pthread_cond_wait(&compositor_cond, &lock);             // entao ele dorme
+      }
+ 
+      compor_musica(*(int *)(pi));                                // se nao estiver dormindo ele compoe parte da musica
+      progredir_musica();                                         // chama a funcao para progredir a barra de progresso
+
+      if(estado == GRAVANDO || (count >= MUS/2 && count < MUS-1)){// se o estado se tornar GRAVANDO
+        pthread_cond_broadcast(&cantor_cond);                     // acorda os cantores
+      }
+    pthread_mutex_unlock(&lock);                                  // devolve o lock
+    sleep(3);                                                     // sleep somente para mostrar uma diferenciacao nos compositores
+  }
+  pthread_exit(0);
+}
+
+void * cantor (void* pi){     // o cantor soh pode trabalhar na musica quando o estado dela eh GRAVANDO
 
   while(1){
-    pthread_mutex_lock(&lock);                      // permite que soh o consumidor acesse o buffer
-        
-        while(estado != COMPONDO){                               // se o contador esta em 0, entao nao ha itens no buffer
-            pthread_cond_wait(&compositor_cond, &lock); // entao o consumidor dorme
-            printf("OS COMPOSITORES ESTÃO DORMINDO\n");
-        }
-    pthread_mutex_unlock(&lock);                    // consumidor libera o lock
+    pthread_mutex_lock(&lock);                                        // cantor pega o lock
+      while(estado != GRAVANDO || !(count >= MUS/2 && count < MUS-1)){// se o estado for diferente de GRAVANDO
+        pthread_cond_wait(&cantor_cond, &lock);                       // entao os cantoes dormem
+      }
+      
+      gravar_musica(*(int *)(pi));                                    // se estiverem acordados eles gravam parte da musica
+      progredir_musica();                                             // chama a funcao para progredir a barra de progresso
 
-    pthread_mutex_lock(&lock_comp);
-        num_comp++;
-        if(num_comp==1){
-            pthread_mutex_lock(&lock_estudio);
-        }
-    pthread_mutex_unlock(&lock_comp);                 
-        
-        
-        compor_musica(*(int *)(pi));                           // REGIAO CRITICA
-        
-    
-    pthread_mutex_lock(&lock_comp);
-        progredir_musica();
-        num_comp--;
-        if(num_comp==0){
-            pthread_mutex_unlock(&lock_estudio);
-        }
-    pthread_mutex_unlock(&lock_comp);
-
+      if(estado == FINALIZANDO || count == MUS - 1){                  // se o estado mudar para FINALIZANDO
+        pthread_cond_wait(&cantor_cond, &lock);                       // os cantores dormem
+      }
+    pthread_mutex_unlock(&lock);                                      // devolve o lock   
+    sleep(3);                                                         // sleep somente para mostrar uma diferenciacao nos cantores
   }
   pthread_exit(0);
   
 }
 
-void * cantor (void* pi){
-
-  while(1){
-    pthread_mutex_lock(&lock);                      // permite que soh o consumidor acesse o buffer
-        while(estado != GRAVANDO){                               // se o contador esta em 0, entao nao ha itens no buffer
-            pthread_cond_wait(&cantor_cond, &lock); // entao o consumidor dorme
-            printf("OS CANTORES ESTÃO DORMINDO\n");
-        }
-    pthread_mutex_unlock(&lock);                    // consumidor libera o lock
-        
-
-    pthread_mutex_lock(&lock_cant);
-        num_cant++;
-        if(num_cant==1){
-            pthread_mutex_lock(&lock_estudio);
-        }
-    pthread_mutex_unlock(&lock_cant);
-
-        
-        gravar_musica(*(int *)(pi));                           // consumidor consome o item retirado
-        
-    
-    pthread_mutex_lock(&lock_cant);
-        progredir_musica();
-        num_cant--;
-        if(num_cant==0){
-            pthread_mutex_unlock(&lock_estudio);
-        }
-    pthread_mutex_unlock(&lock_cant);
-
-  }
-  pthread_exit(0);
-  
-}
-
-void imprime_buffer(){          // funcao que imprime o estado do buffer na tela
+void imprime_buffer(){          // funcao para imprimir o buffer
   printf("ESTADO DO BUFFER: ");
-  for(int i=0; i < MUS; i++){     // percorre todo o buffer e imprime cada item
-    if(bufferMusica[i] == 1){
+  for(int i=0; i < MUS; i++){     
+    if(bufferMusica[i] == 1){   // se o index for 1, quer dizer vai ser preenchido
         printf("|X| ");
-    }else{
-        printf("| | ");
+    }else{                      // senao ficara vazio
+        printf("|_| ");
     }
   }
-  printf("estado: %f count: %d\n", estado, count);
+  printf("\n");
 }
 
-void produz_musica(){                                      // funcao que simula a producao de um item pelo produtor
-  sleep(rand()%5);                                      // tempo aleatorio para simular o tempo de producao
+void limpa_buffer(){          // funcao para limpar o buffer quando a musica termina de ser feita e uma nova começa
+  for(int i=0; i < MUS; i++){     
+    bufferMusica[i] = 0;      // substitui todos os numeros do array por 0, ou seja, a barra de progreso fica vazia novamente
+  }
+}
+
+void produz_musica(){ // funcao para simular a producao da musica                         
+  sleep(rand()%5);    // tempo de simulacao para a producao                            
   printf("O produtor produziu parte da música\n");
 }
 
-void progredir_musica(){             // funcao que insere o item produzido no buffer pelo produtor
-    bufferMusica[count] = 1;        // o item eh colocado no buffer na posicao indicada pelo index
-    count++;                                  // e aumenta o contador de itens no buffer
-    if(count> 0 && count < MUS/2){
+void progredir_musica(){            // funcao para atualizar a barra de progresso (buffer) 
+    bufferMusica[count] = 1;        // a posicao usando o contador como indice sera preenchido com 1
+    count++;                        // incrementa o contador    
+    if(count> 0 && count < MUS/2){  // atualiza o estado com base no count
         estado = COMPONDO;
-    }else if(count >= MUS/2 && count <= MUS-1){
+    }else if(count >= MUS/2 && count < MUS-1){
         estado = GRAVANDO;
     }else{
         estado = FINALIZANDO;
     }
-    imprime_buffer();                     // chama a funcao para mostrar o estado do buffer
+    imprime_buffer();               // chama a funcao para imprimir o buffer na tela    
 }
 
-void compor_musica(int comp){                    // funcao que simula o consumo do item pelo consumidor
-  sleep(rand()%5);                              // tempo aleatorio para simular o tempo de consumo
+void compor_musica(int comp){ // funcao para simular a composicao da musica                 
+  sleep(rand()%5);            // tempo de simulacao para a composicao                  
   printf("O compositor %d compôs parte da música\n", comp);
 }
 
-void gravar_musica(int cant){                    // funcao que simula o consumo do item pelo consumidor
-  sleep(rand()%5);                              // tempo aleatorio para simular o tempo de consumo
+void gravar_musica(int cant){ // funcao para simular a gravacao da musica                   
+  sleep(rand()%5);            // tempo de simulacao para a gravacao                  
   printf("O cantor %d gravou parte da música\n", cant);
 }
 
-void finalizar_musica(){
-    sleep(rand()%5);
-    printf("A MÚSICA FOI FINALIZADA PELO PRODUTOR\n"); 
+void finalizar_musica(){  // funcao para simular a finalizacao da musica pelo produtor
+    sleep(rand()%5);      // tempo de simulacao para a finalizacao
+    printf("A MÚSICA FOI FINALIZADA PELO PRODUTOR. META: %d/%d\n", quantidade_musicas, META); 
 }
