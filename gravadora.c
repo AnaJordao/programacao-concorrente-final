@@ -32,7 +32,7 @@ void imprime_buffer();        // funcao que imprime o estado da barra de progres
 void limpa_buffer();          // funcao que limpa o buffer quando uma nova musica comeca a ser feita
 
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;         // lock usado para as variaveis condicionais
-pthread_mutex_t lock_estudio = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t lock_estudio = PTHREAD_MUTEX_INITIALIZER; // lock para interromper o fluxo do produtor
 pthread_mutex_t lock_folga = PTHREAD_MUTEX_INITIALIZER;   // lock usado para quando o produtor tira folga
 pthread_cond_t produtor_cond = PTHREAD_COND_INITIALIZER;  // variavel condicional do produtor
 pthread_cond_t compositor_cond = PTHREAD_COND_INITIALIZER;// variavel condicional do compositor
@@ -100,8 +100,11 @@ char *argv[];
 }
 
 void * produtor (void* pi){   // o produtor pode trabalhar em qualquer estado da musica e somente ele pode finaliza-la
-
+  int i = *((int *) pi);
   while(1){
+    sleep(rand()%(i+1));
+    pthread_mutex_lock(&lock_estudio);                              // lock para interromper o fluxo do produtor
+    pthread_mutex_unlock(&lock_estudio);                            
     pthread_mutex_lock(&lock);                                      // o produto pega o lock             
     
       if(estado == COMPONDO || (count>= 0 && count < MUS/2)){       // se o estado da musica for COMPONDO
@@ -123,14 +126,15 @@ void * produtor (void* pi){   // o produtor pode trabalhar em qualquer estado da
         sem_post(&sem_musicas);                       // da um post no semaforo de musicas feitas
         pthread_cond_broadcast(&compositor_cond);     // acorda os compositores novamente
       }
-    pthread_mutex_unlock(&lock);                      // devolve o lock 
 
-    pthread_mutex_lock(&lock_folga);        // o produtor pega o lock a folga
       if(quantidade_musicas != META){       // se o contador de musicas prontas for diferente da meta, entao ele ainda nao a bateu
         produz_musica();                    // chama a funcao para simular a producao de parte da musica          
         progredir_musica();                 // chama a funcao para progredir a barra de progresso
-      }         
-      else if(quantidade_musicas == META){  // se a quantidade de musicas prontas for igual a meta, entao ele bate
+      }
+    pthread_mutex_unlock(&lock);                      // devolve o lock 
+
+    pthread_mutex_lock(&lock_folga);        // o produtor pega o lock a folga       
+      if(quantidade_musicas == META){  // se a quantidade de musicas prontas for igual a meta, entao ele bate
         printf("O PRODUTOR BATEU A META E TIROU UM DIA DE FOLGA!\n");
         sleep(30);                          // tempo para simular a folga do produtor
 
@@ -139,17 +143,20 @@ void * produtor (void* pi){   // o produtor pode trabalhar em qualquer estado da
         }
         quantidade_musicas = 0;             // a quantidade de musicas prontas volta a ser 0
         printf("O PRODUTOR VOLTOU DA FOLGA!\n");// ele volta da folga
-      }
+      } 
     pthread_mutex_unlock(&lock_folga);      // devolve o lock
   }
   pthread_exit(0);
 }
 
 void * compositor (void* pi){ // o compositor soh pode trabalhar na musica quando o estado dela eh COMPONDO
-
+  int i = *((int *) pi);
   while(1){  
+    sleep(rand()%(i+1));
+    pthread_mutex_lock(&lock_estudio);                            // lock para interromper o fluxo do produtor
     pthread_mutex_lock(&lock);                                    // compositor pega o lock
       while(estado != COMPONDO || !(count>= 0 && count < MUS/2)){ // se o estado nao estiver em COMPONDO                          
+          pthread_mutex_unlock(&lock_estudio);
           pthread_cond_wait(&compositor_cond, &lock);             // entao ele dorme
       }
  
@@ -160,16 +167,20 @@ void * compositor (void* pi){ // o compositor soh pode trabalhar na musica quand
         pthread_cond_broadcast(&cantor_cond);                     // acorda os cantores
       }
     pthread_mutex_unlock(&lock);                                  // devolve o lock
-    sleep(3);                                                     // sleep somente para mostrar uma diferenciacao nos compositores
+    pthread_mutex_unlock(&lock_estudio); 
+    //sleep(3);                                                     // sleep somente para mostrar uma diferenciacao nos compositores
   }
   pthread_exit(0);
 }
 
 void * cantor (void* pi){     // o cantor soh pode trabalhar na musica quando o estado dela eh GRAVANDO
-
+  int i = *((int *) pi);
   while(1){
+    sleep(rand()%(i+1));
+    pthread_mutex_lock(&lock_estudio);                                // lock para interromper o fluxo do produtor
     pthread_mutex_lock(&lock);                                        // cantor pega o lock
       while(estado != GRAVANDO || !(count >= MUS/2 && count < MUS-1)){// se o estado for diferente de GRAVANDO
+        pthread_mutex_unlock(&lock_estudio);
         pthread_cond_wait(&cantor_cond, &lock);                       // entao os cantoes dormem
       }
       
@@ -177,10 +188,12 @@ void * cantor (void* pi){     // o cantor soh pode trabalhar na musica quando o 
       progredir_musica();                                             // chama a funcao para progredir a barra de progresso
 
       if(estado == FINALIZANDO || count == MUS - 1){                  // se o estado mudar para FINALIZANDO
+        pthread_mutex_unlock(&lock_estudio);
         pthread_cond_wait(&cantor_cond, &lock);                       // os cantores dormem
       }
-    pthread_mutex_unlock(&lock);                                      // devolve o lock   
-    sleep(3);                                                         // sleep somente para mostrar uma diferenciacao nos cantores
+    pthread_mutex_unlock(&lock);                                      // devolve o lock 
+    pthread_mutex_unlock(&lock_estudio);  
+    //sleep(3);                                                         // sleep somente para mostrar uma diferenciacao nos cantores
   }
   pthread_exit(0);
   
